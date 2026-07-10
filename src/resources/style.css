@@ -1,0 +1,35 @@
+.sound-window {
+  background: transparent;
+}
+
+.sound-panel {
+  background: #f7f8fa;
+  border: 1px solid #d9e0e7;
+  border-radius: 16px;
+  padding: 8px;
+}
+
+button.volume-button {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 14px;
+  background: #e9eef3;
+  color: #24313d;
+  font-weight: 700;
+}
+
+button.volume-button:hover {
+  background: #dbe7f1;
+}
+
+scale trough {
+  min-height: 6px;
+  border-radius: 3px;
+  background: #dfe6ec;
+}
+
+scale highlight {
+  border-radius: 3px;
+  background: #4f8fc0;
+}
