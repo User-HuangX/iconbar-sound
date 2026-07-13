@@ -1,29 +1,48 @@
-use core::f64;
-use std::{cell::Cell, rc::Rc};
+mod audio;
 
-use gtk4::{ApplicationWindow, Button, Label, Orientation, prelude::*};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::Duration,
+};
+
+use audio::{AudioCommand, AudioDevice, AudioEvent, AudioService, EndpointKind, EndpointState};
+use gtk4::{
+    ApplicationWindow, Button, DropDown, Label, Orientation, ProgressBar, Scale, StringList,
+    Switch, prelude::*,
+};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
-use volumecontrol::AudioDevice;
 
 const APP_ID: &str = "top.hxdbk.gtk-layer-sound";
 const WINDOW_WIDTH: i32 = 500;
-const WINDOW_HEIGHT: i32 = 200;
+const WINDOW_HEIGHT: i32 = 330;
 const BIAS: i32 = 1300;
 
-fn activate(app: &gtk4::Application) -> Result<(), volumecontrol::AudioError> {
+fn main() {
+    let application = gtk4::Application::new(Some(APP_ID), Default::default());
+    application.connect_activate(activate);
+    application.run();
+}
+
+fn activate(app: &gtk4::Application) {
     install_css();
-    LocalWindowBuilder::new(app)?
-        .set_windows()
-        .set_box()
-        .build()
-        .show();
-    Ok(())
+    let service = AudioService::spawn();
+    let window = ApplicationWindow::builder()
+        .application(app)
+        .default_width(WINDOW_WIDTH)
+        .default_height(WINDOW_HEIGHT)
+        .build();
+    configure_layer_shell(&window);
+    let ui = Rc::new(Controls::new());
+    bind_controls(&ui, service.commands.clone());
+    window.set_child(Some(&ui.root));
+    poll_events(Rc::clone(&ui), service);
+    window.present();
 }
 
 fn install_css() {
     let provider = gtk4::CssProvider::new();
     provider.load_from_data(include_str!("resources/style.css"));
-
     let display = gtk4::gdk::Display::default().expect("GTK display is unavailable");
     gtk4::style_context_add_provider_for_display(
         &display,
@@ -32,192 +51,323 @@ fn install_css() {
     );
 }
 
-fn main() -> Result<(), volumecontrol::AudioError> {
-    let application = gtk4::Application::new(Some(APP_ID), Default::default());
-
-    application.connect_activate(|app| {
-        if let Err(error) = activate(app) {
-            eprintln!("failed to initialize the audio controls: {error}");
-        }
-    });
-
-    application.run();
-    Ok(())
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Message {
-    SIncrement,
-    SDecrement,
-    MIncrement,
-    MDecrement,
-}
-
-#[derive(Debug)]
-struct LocalWindowBuilder {
-    w: ApplicationWindow,
-    speaker_volume: Rc<Cell<f64>>,
-    microphone_volume: Rc<Cell<f64>>,
-}
-
-impl LocalWindowBuilder {
-    fn new(app: &gtk4::Application) -> Result<Self, volumecontrol::AudioError> {
-        let device = AudioDevice::from_default()?;
-        let current_vol = device.get_vol()?;
-        Ok(Self {
-            w: ApplicationWindow::builder().application(app).build(),
-            speaker_volume: Rc::new(Cell::new(f64::from(current_vol))),
-            microphone_volume: Rc::new(Cell::new(0.0)),
-        })
+fn configure_layer_shell(window: &ApplicationWindow) {
+    window.add_css_class("sound-window");
+    window.init_layer_shell();
+    window.set_layer(Layer::Overlay);
+    for (edge, active) in [
+        (Edge::Left, true),
+        (Edge::Right, false),
+        (Edge::Top, true),
+        (Edge::Bottom, false),
+    ] {
+        window.set_anchor(edge, active);
     }
+    window.set_margin(Edge::Left, BIAS);
+}
 
-    fn set_windows(self) -> Self {
-        self.w.add_css_class("sound-window");
-        self.w.init_layer_shell();
-        self.w.set_default_size(WINDOW_WIDTH, WINDOW_HEIGHT);
-        //放在最顶层
-        self.w.set_layer(Layer::Overlay);
+struct EndpointWidgets {
+    kind: EndpointKind,
+    card: gtk4::Box,
+    devices: StringList,
+    selector: DropDown,
+    volume: Scale,
+    mute: Switch,
+    value: Label,
+    selected: Rc<RefCell<Vec<AudioDevice>>>,
+    updating: Rc<Cell<bool>>,
+}
 
-        for (anchor, state) in [
-            (Edge::Left, true),
-            (Edge::Right, false),
-            (Edge::Top, true),
-            (Edge::Bottom, false),
-        ] {
-            self.w.set_anchor(anchor, state);
-        }
+struct Controls {
+    root: gtk4::Box,
+    output: EndpointWidgets,
+    input: EndpointWidgets,
+    level: ProgressBar,
+    meter_state: Label,
+    error: Label,
+    error_revealer: gtk4::Revealer,
+    refresh: Button,
+}
 
-        self.w.set_margin(Edge::Left, BIAS);
-        self
-    }
-
-    fn set_box(self) -> Self {
-        let content = gtk4::Box::builder()
+impl Controls {
+    fn new() -> Self {
+        let root = gtk4::Box::builder()
             .orientation(Orientation::Vertical)
             .spacing(12)
+            .margin_top(16)
+            .margin_bottom(16)
+            .margin_start(16)
+            .margin_end(16)
             .build();
-        content.add_css_class("sound-panel");
-        let speaker_box = gtk4::Box::builder()
+        root.add_css_class("sound-panel");
+        let title_row = gtk4::Box::builder()
             .orientation(Orientation::Horizontal)
-            .spacing(12)
-            .margin_top(24)
-            .margin_bottom(24)
-            .margin_start(24)
-            .margin_end(24)
+            .spacing(8)
             .build();
+        title_row.add_css_class("title-row");
+        let title = Label::new(Some("声音控制"));
+        title.add_css_class("panel-title");
+        title.set_hexpand(true);
+        title.set_halign(gtk4::Align::Start);
+        let refresh = Button::builder().label("刷新设备").build();
+        refresh.add_css_class("refresh-button");
+        title_row.append(&title);
+        title_row.append(&refresh);
+        root.append(&title_row);
 
-        let microphone_box = gtk4::Box::builder()
+        let output = endpoint_widgets(
+            EndpointKind::Output,
+            "输出设备",
+            "耳机、扬声器和其他播放设备",
+        );
+        let input = endpoint_widgets(EndpointKind::Input, "麦克风", "输入电平与录音设备");
+        let meter = gtk4::Box::builder()
             .orientation(Orientation::Horizontal)
-            .spacing(12)
-            .margin_top(24)
-            .margin_bottom(24)
-            .margin_start(24)
-            .margin_end(24)
+            .spacing(10)
             .build();
-        let s_button_up = Button::builder().label("+").build();
-        s_button_up.add_css_class("volume-button");
-        let speaker_volume = Rc::clone(&self.speaker_volume);
-        let speaker_label = Label::new(Some(&speaker_volume.get().to_string()));
-        let label = speaker_label.clone();
-        s_button_up.connect_clicked(move |_| {
-            let value = Self::adjust_volume(&speaker_volume, Message::SIncrement, 1.0)
-                .expect("failed to increase speaker volume");
-            label.set_text(&value.to_string());
-        });
-        let s_button_down = Button::builder().label("-").build();
-        s_button_down.add_css_class("volume-button");
-        let speaker_volume = Rc::clone(&self.speaker_volume);
-        let label = speaker_label.clone();
-        s_button_down.connect_clicked(move |_| {
-            let value = Self::adjust_volume(&speaker_volume, Message::SDecrement, 1.0)
-                .expect("failed to decrease speaker volume");
-            label.set_text(&value.to_string());
-        });
-        // 核心步骤：使用 Adjustment 定义范围 (值, 最小, 最大, 步进...)
-        let speaker_adjustment =
-            gtk4::Adjustment::new(self.speaker_volume.get(), 0.0, 100.0, 1.0, 10.0, 0.0);
-
-        // 创建 Horizontal(水平) 或 Vertical(垂直) 滑动条
-        let speaker_scale = gtk4::Scale::builder()
-            .orientation(gtk4::Orientation::Horizontal)
-            .adjustment(&speaker_adjustment)
-            .draw_value(true) // 显示数值
-            .digits(0) // 小数位数
-            .width_request(180)
-            .hexpand(true)
+        meter.add_css_class("meter-row");
+        let meter_label = Label::new(Some("输入电平"));
+        meter_label.add_css_class("meter-label");
+        let level = ProgressBar::new();
+        level.set_hexpand(true);
+        level.add_css_class("input-level");
+        let meter_state = Label::new(Some("等待信号"));
+        meter_state.add_css_class("meter-state");
+        meter.append(&meter_label);
+        meter.append(&level);
+        meter.append(&meter_state);
+        input.card.append(&meter);
+        root.append(&output.card);
+        root.append(&input.card);
+        let error = Label::new(None);
+        error.set_wrap(true);
+        error.set_xalign(0.0);
+        error.add_css_class("error-text");
+        let error_revealer = gtk4::Revealer::builder()
+            .transition_type(gtk4::RevealerTransitionType::SlideDown)
+            .transition_duration(180)
+            .child(&error)
             .build();
-
-        // 信号处理：监听数值变化
-        let speaker_volume = Rc::clone(&self.speaker_volume);
-        let label = speaker_label.clone();
-        speaker_scale.connect_value_changed(move |s| {
-            let value =
-                Self::set_volume(&speaker_volume, s.value()).expect("failed to set speaker volume");
-            label.set_text(&value.to_string());
-        });
-
-        let m_button_up = Button::builder().label("+").build();
-        m_button_up.add_css_class("volume-button");
-        let microphone_volume = Rc::clone(&self.microphone_volume);
-        let microphone_label = Label::new(Some(&microphone_volume.get().to_string()));
-        let label = microphone_label.clone();
-        m_button_up.connect_clicked(move |_| {
-            let value = Self::adjust_volume(&microphone_volume, Message::MIncrement, 1.0)
-                .expect("failed to increase microphone volume");
-            label.set_text(&value.to_string());
-        });
-        let m_button_down = Button::builder().label("-").build();
-        m_button_down.add_css_class("volume-button");
-        let microphone_volume = Rc::clone(&self.microphone_volume);
-        let label = microphone_label.clone();
-        m_button_down.connect_clicked(move |_| {
-            let value = Self::adjust_volume(&microphone_volume, Message::MDecrement, 1.0)
-                .expect("failed to decrease microphone volume");
-            label.set_text(&value.to_string());
-        });
-        speaker_box.append(&s_button_up);
-        speaker_box.append(&s_button_down);
-        speaker_box.append(&speaker_label);
-        speaker_box.append(&speaker_scale);
-        microphone_box.append(&m_button_up);
-        microphone_box.append(&m_button_down);
-        microphone_box.append(&microphone_label);
-        content.append(&speaker_box);
-        content.append(&microphone_box);
-        self.w.set_child(Some(&content));
-
-        self
-    }
-
-    fn build(self) -> ApplicationWindow {
-        self.w
-    }
-
-    fn adjust_volume(
-        volume: &Cell<f64>,
-        message: Message,
-        step: f64,
-    ) -> Result<f64, volumecontrol::AudioError> {
-        let value = match message {
-            Message::SIncrement | Message::MIncrement => volume.get() + step,
-            Message::SDecrement | Message::MDecrement => volume.get() - step,
-        };
-        match message {
-            Message::SIncrement | Message::SDecrement => Self::set_volume(volume, value),
-            Message::MIncrement | Message::MDecrement => {
-                let value = value.clamp(0.0, 100.0);
-                volume.set(value);
-                Ok(value)
-            }
+        root.append(&error_revealer);
+        Self {
+            root,
+            output,
+            input,
+            level,
+            meter_state,
+            error,
+            error_revealer,
+            refresh,
         }
     }
-
-    fn set_volume(volume: &Cell<f64>, value: f64) -> Result<f64, volumecontrol::AudioError> {
-        let value = value.clamp(0.0, 100.0);
-        volume.set(value);
-        let device = AudioDevice::from_default()?;
-        device.set_vol(value.round() as u8)?;
-
-        Ok(value)
+    fn endpoint(&self, kind: EndpointKind) -> &EndpointWidgets {
+        if kind == EndpointKind::Output {
+            &self.output
+        } else {
+            &self.input
+        }
     }
+    fn apply_snapshot(&self, state: EndpointState) {
+        let endpoint = self.endpoint(state.kind);
+        endpoint.updating.set(true);
+        endpoint.devices.splice(0, endpoint.devices.n_items(), &[]);
+        for device in &state.devices {
+            endpoint.devices.append(&device.label);
+        }
+        let selected = state
+            .default_name
+            .as_deref()
+            .and_then(|name| state.devices.iter().position(|device| device.name == name))
+            .unwrap_or(0);
+        endpoint.selected.replace(state.devices);
+        endpoint.selector.set_selected(selected as u32);
+        if let Some(device) = endpoint.selected.borrow().get(selected) {
+            endpoint.volume.set_value(device.volume * 100.0);
+            endpoint.mute.set_active(device.muted);
+            endpoint
+                .value
+                .set_text(&format!("{:.0}%", device.volume * 100.0));
+            endpoint.card.set_sensitive(true);
+            endpoint.card.remove_css_class("muted");
+            if device.muted {
+                endpoint.card.add_css_class("muted");
+            }
+        } else {
+            endpoint.card.set_sensitive(false);
+        }
+        endpoint.updating.set(false);
+    }
+}
+
+fn endpoint_widgets(kind: EndpointKind, heading: &str, subtitle: &str) -> EndpointWidgets {
+    let card = gtk4::Box::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(8)
+        .build();
+    card.add_css_class("endpoint-card");
+    let head = gtk4::Box::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .build();
+    let labels = gtk4::Box::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(1)
+        .hexpand(true)
+        .build();
+    let title = Label::new(Some(heading));
+    title.set_xalign(0.0);
+    title.add_css_class("endpoint-title");
+    let detail = Label::new(Some(subtitle));
+    detail.set_xalign(0.0);
+    detail.add_css_class("endpoint-subtitle");
+    labels.append(&title);
+    labels.append(&detail);
+    let mute = Switch::new();
+    mute.add_css_class("mute-switch");
+    head.append(&labels);
+    head.append(&mute);
+    let devices = StringList::new(&[]);
+    let selector = DropDown::builder().model(&devices).hexpand(true).build();
+    selector.add_css_class("device-selector");
+    let controls = gtk4::Box::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(10)
+        .build();
+    let volume = Scale::with_range(Orientation::Horizontal, 0.0, 150.0, 1.0);
+    volume.set_draw_value(false);
+    volume.set_hexpand(true);
+    volume.add_css_class("volume-scale");
+    let value = Label::new(Some("0%"));
+    value.set_width_chars(4);
+    value.add_css_class("volume-value");
+    controls.append(&volume);
+    controls.append(&value);
+    card.append(&head);
+    card.append(&selector);
+    card.append(&controls);
+    EndpointWidgets {
+        kind,
+        card,
+        devices,
+        selector,
+        volume,
+        mute,
+        value,
+        selected: Rc::new(RefCell::new(Vec::new())),
+        updating: Rc::new(Cell::new(false)),
+    }
+}
+
+fn bind_controls(ui: &Rc<Controls>, commands: std::sync::mpsc::Sender<AudioCommand>) {
+    let refresh = commands.clone();
+    ui.refresh.connect_clicked(move |_| {
+        let _ = refresh.send(AudioCommand::Refresh);
+    });
+    bind_endpoint(&ui.output, commands.clone());
+    bind_endpoint(&ui.input, commands);
+}
+
+fn bind_endpoint(endpoint: &EndpointWidgets, commands: std::sync::mpsc::Sender<AudioCommand>) {
+    let kind = endpoint.kind;
+    let devices = Rc::clone(&endpoint.selected);
+    let updating = Rc::clone(&endpoint.updating);
+    let tx = commands.clone();
+    endpoint.selector.connect_selected_notify(move |selector| {
+        if updating.get() {
+            return;
+        }
+        if let Some(device) = devices.borrow().get(selector.selected() as usize) {
+            let _ = tx.send(AudioCommand::Select {
+                kind,
+                index: device.index,
+            });
+        }
+    });
+    let kind = endpoint.kind;
+    let devices = Rc::clone(&endpoint.selected);
+    let updating = Rc::clone(&endpoint.updating);
+    let selector = endpoint.selector.clone();
+    let tx = commands.clone();
+    let pending_volume = Rc::new(RefCell::new(None::<gtk4::glib::SourceId>));
+    let latest_volume = Rc::new(Cell::new(0.0));
+    endpoint.volume.connect_value_changed(move |scale| {
+        if updating.get() {
+            return;
+        }
+        latest_volume.set(scale.value() / 100.0);
+        if pending_volume.borrow().is_none() {
+            let pending = Rc::clone(&pending_volume);
+            let latest = Rc::clone(&latest_volume);
+            let devices = Rc::clone(&devices);
+            let selector = selector.clone();
+            let tx = tx.clone();
+            let source = gtk4::glib::timeout_add_local_once(Duration::from_millis(80), move || {
+                pending.borrow_mut().take();
+                if let Some(device) = devices.borrow().get(selector.selected() as usize) {
+                    let _ = tx.send(AudioCommand::SetVolume {
+                        kind,
+                        index: device.index,
+                        volume: latest.get(),
+                    });
+                }
+            });
+            pending_volume.replace(Some(source));
+        }
+    });
+    let kind = endpoint.kind;
+    let devices = Rc::clone(&endpoint.selected);
+    let updating = Rc::clone(&endpoint.updating);
+    let selector = endpoint.selector.clone();
+    endpoint.mute.connect_active_notify(move |toggle| {
+        if updating.get() {
+            return;
+        }
+        if let Some(device) = devices.borrow().get(selector.selected() as usize) {
+            let _ = commands.send(AudioCommand::SetMute {
+                kind,
+                index: device.index,
+                muted: toggle.is_active(),
+            });
+        }
+    });
+}
+
+fn poll_events(ui: Rc<Controls>, service: AudioService) {
+    let refresh = service.commands.clone();
+    gtk4::glib::timeout_add_local(Duration::from_secs(2), move || {
+        let _ = refresh.send(AudioCommand::Refresh);
+        gtk4::glib::ControlFlow::Continue
+    });
+    gtk4::glib::timeout_add_local(Duration::from_millis(40), move || {
+        while let Ok(event) = service.events.try_recv() {
+            match event {
+                AudioEvent::Snapshot(state) => {
+                    ui.apply_snapshot(state);
+                    ui.error_revealer.set_reveal_child(false);
+                }
+                AudioEvent::Level(level) => {
+                    let selected = ui.input.selector.selected() as usize;
+                    let muted = ui
+                        .input
+                        .selected
+                        .borrow()
+                        .get(selected)
+                        .is_some_and(|device| device.muted);
+                    ui.level.set_fraction(if muted { 0.0 } else { level });
+                    ui.meter_state.set_text(if muted {
+                        "已静音"
+                    } else if level > 0.02 {
+                        "正在接收"
+                    } else {
+                        "无信号"
+                    });
+                }
+                AudioEvent::Error(message) => {
+                    ui.error.set_text(&message);
+                    ui.error_revealer.set_reveal_child(true);
+                }
+            }
+        }
+        gtk4::glib::ControlFlow::Continue
+    });
 }
