@@ -100,20 +100,10 @@ impl Controls {
             .margin_end(16)
             .build();
         root.add_css_class("sound-panel");
-        let title_row = gtk4::Box::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(8)
-            .build();
-        title_row.add_css_class("title-row");
-        let title = Label::new(Some("声音控制"));
-        title.add_css_class("panel-title");
-        title.set_hexpand(true);
-        title.set_halign(gtk4::Align::Start);
-        let refresh = Button::builder().label("刷新设备").build();
+        let refresh = Button::builder().label("刷新").build();
         refresh.add_css_class("refresh-button");
-        title_row.append(&title);
-        title_row.append(&refresh);
-        root.append(&title_row);
+        refresh.set_halign(gtk4::Align::End);
+        root.append(&refresh);
 
         let output = endpoint_widgets(
             EndpointKind::Output,

@@ -8,7 +8,6 @@
   color: #e7f4f6;
 }
 
-.panel-title { font-size: 18px; font-weight: 800; letter-spacing: 0.02em; }
 button.refresh-button { border-radius: 10px; padding: 5px 10px; background: rgba(100, 220, 231, 0.12); border: 1px solid rgba(112, 231, 240, 0.22); color: #a7f6fa; transition: 180ms ease-out; }
 button.refresh-button:hover { background: rgba(100, 220, 231, 0.23); transform: translateY(-1px); }
 
