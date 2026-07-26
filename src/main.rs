@@ -3,6 +3,10 @@ mod audio;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -14,17 +18,20 @@ use gtk4::{
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 
 const APP_ID: &str = "top.hxdbk.gtk-layer-sound";
-const WINDOW_WIDTH: i32 = 520;
-const WINDOW_HEIGHT: i32 = 420;
+const WINDOW_WIDTH: i32 = 480;
+const WINDOW_HEIGHT: i32 = 360;
 const BIAS: i32 = 1300;
 
 fn main() {
+    let toggle_requested = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::consts::SIGWINCH, Arc::clone(&toggle_requested))
+        .expect("failed to register window toggle signal");
     let application = gtk4::Application::new(Some(APP_ID), Default::default());
-    application.connect_activate(activate);
+    application.connect_activate(move |app| activate(app, Arc::clone(&toggle_requested)));
     application.run();
 }
 
-fn activate(app: &gtk4::Application) {
+fn activate(app: &gtk4::Application, toggle_requested: Arc<AtomicBool>) {
     install_css();
     let service = AudioService::spawn();
     let window = ApplicationWindow::builder()
@@ -38,6 +45,20 @@ fn activate(app: &gtk4::Application) {
     window.set_child(Some(&ui.root));
     poll_events(Rc::clone(&ui), service);
     window.present();
+    poll_window_toggle(window, toggle_requested);
+}
+
+fn poll_window_toggle(window: ApplicationWindow, toggle_requested: Arc<AtomicBool>) {
+    gtk4::glib::timeout_add_local(Duration::from_millis(16), move || {
+        if toggle_requested.swap(false, Ordering::Relaxed) {
+            if window.is_visible() {
+                window.set_visible(false);
+            } else {
+                window.present();
+            }
+        }
+        gtk4::glib::ControlFlow::Continue
+    });
 }
 
 fn install_css() {
@@ -93,52 +114,35 @@ impl Controls {
     fn new() -> Self {
         let root = gtk4::Box::builder()
             .orientation(Orientation::Vertical)
-            .spacing(12)
-            .margin_top(14)
-            .margin_bottom(14)
-            .margin_start(14)
-            .margin_end(14)
+            .spacing(8)
+            .margin_top(8)
+            .margin_bottom(8)
+            .margin_start(8)
+            .margin_end(8)
             .build();
         root.add_css_class("sound-panel");
 
         let header = gtk4::Box::builder()
             .orientation(Orientation::Horizontal)
-            .spacing(12)
+            .spacing(9)
             .build();
         header.add_css_class("panel-header");
-        let brand_icon = gtk4::Box::builder()
-            .halign(gtk4::Align::Center)
-            .valign(gtk4::Align::Center)
-            .build();
-        brand_icon.add_css_class("brand-icon");
-        let brand_glyph = Image::from_icon_name("audio-volume-high-symbolic");
-        brand_glyph.set_pixel_size(22);
-        brand_glyph.set_hexpand(true);
-        brand_glyph.set_vexpand(true);
-        brand_glyph.set_halign(gtk4::Align::Center);
-        brand_glyph.set_valign(gtk4::Align::Center);
-        brand_icon.append(&brand_glyph);
         let heading = gtk4::Box::builder()
             .orientation(Orientation::Vertical)
             .spacing(1)
             .hexpand(true)
             .build();
-        let eyebrow = Label::new(Some("SYSTEM AUDIO"));
-        eyebrow.set_xalign(0.0);
-        eyebrow.add_css_class("panel-eyebrow");
-        let title = Label::new(Some("声音控制"));
+        let title = Label::new(Some("声音"));
         title.set_xalign(0.0);
         title.add_css_class("panel-title");
-        let description = Label::new(Some("管理当前会话的播放与录音设备"));
+        let description = Label::new(Some("输出与输入设备"));
         description.set_xalign(0.0);
         description.add_css_class("panel-description");
-        heading.append(&eyebrow);
         heading.append(&title);
         heading.append(&description);
-        let refresh = Button::builder().label("刷新设备").build();
+        let refresh = Button::builder().label("刷新").build();
         refresh.add_css_class("refresh-button");
         refresh.set_tooltip_text(Some("重新扫描音频设备"));
-        header.append(&brand_icon);
         header.append(&heading);
         header.append(&refresh);
         root.append(&header);
@@ -230,9 +234,13 @@ impl Controls {
 fn endpoint_widgets(kind: EndpointKind, heading: &str, subtitle: &str) -> EndpointWidgets {
     let card = gtk4::Box::builder()
         .orientation(Orientation::Vertical)
-        .spacing(8)
+        .spacing(7)
         .build();
     card.add_css_class("endpoint-card");
+    card.add_css_class(match kind {
+        EndpointKind::Output => "output-card",
+        EndpointKind::Input => "input-card",
+    });
     let head = gtk4::Box::builder()
         .orientation(Orientation::Horizontal)
         .spacing(10)
