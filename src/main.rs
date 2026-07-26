@@ -8,14 +8,14 @@ use std::{
 
 use audio::{AudioCommand, AudioDevice, AudioEvent, AudioService, EndpointKind, EndpointState};
 use gtk4::{
-    ApplicationWindow, Button, DropDown, Label, Orientation, ProgressBar, Scale, StringList,
+    ApplicationWindow, Button, DropDown, Image, Label, Orientation, ProgressBar, Scale, StringList,
     Switch, prelude::*,
 };
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 
 const APP_ID: &str = "top.hxdbk.gtk-layer-sound";
-const WINDOW_WIDTH: i32 = 500;
-const WINDOW_HEIGHT: i32 = 330;
+const WINDOW_WIDTH: i32 = 520;
+const WINDOW_HEIGHT: i32 = 420;
 const BIAS: i32 = 1300;
 
 fn main() {
@@ -94,16 +94,54 @@ impl Controls {
         let root = gtk4::Box::builder()
             .orientation(Orientation::Vertical)
             .spacing(12)
-            .margin_top(16)
-            .margin_bottom(16)
-            .margin_start(16)
-            .margin_end(16)
+            .margin_top(14)
+            .margin_bottom(14)
+            .margin_start(14)
+            .margin_end(14)
             .build();
         root.add_css_class("sound-panel");
-        let refresh = Button::builder().label("刷新").build();
+
+        let header = gtk4::Box::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(12)
+            .build();
+        header.add_css_class("panel-header");
+        let brand_icon = gtk4::Box::builder()
+            .halign(gtk4::Align::Center)
+            .valign(gtk4::Align::Center)
+            .build();
+        brand_icon.add_css_class("brand-icon");
+        let brand_glyph = Image::from_icon_name("audio-volume-high-symbolic");
+        brand_glyph.set_pixel_size(22);
+        brand_glyph.set_hexpand(true);
+        brand_glyph.set_vexpand(true);
+        brand_glyph.set_halign(gtk4::Align::Center);
+        brand_glyph.set_valign(gtk4::Align::Center);
+        brand_icon.append(&brand_glyph);
+        let heading = gtk4::Box::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(1)
+            .hexpand(true)
+            .build();
+        let eyebrow = Label::new(Some("SYSTEM AUDIO"));
+        eyebrow.set_xalign(0.0);
+        eyebrow.add_css_class("panel-eyebrow");
+        let title = Label::new(Some("声音控制"));
+        title.set_xalign(0.0);
+        title.add_css_class("panel-title");
+        let description = Label::new(Some("管理当前会话的播放与录音设备"));
+        description.set_xalign(0.0);
+        description.add_css_class("panel-description");
+        heading.append(&eyebrow);
+        heading.append(&title);
+        heading.append(&description);
+        let refresh = Button::builder().label("刷新设备").build();
         refresh.add_css_class("refresh-button");
-        refresh.set_halign(gtk4::Align::End);
-        root.append(&refresh);
+        refresh.set_tooltip_text(Some("重新扫描音频设备"));
+        header.append(&brand_icon);
+        header.append(&heading);
+        header.append(&refresh);
+        root.append(&header);
 
         let output = endpoint_widgets(
             EndpointKind::Output,
@@ -197,8 +235,24 @@ fn endpoint_widgets(kind: EndpointKind, heading: &str, subtitle: &str) -> Endpoi
     card.add_css_class("endpoint-card");
     let head = gtk4::Box::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(8)
+        .spacing(10)
         .build();
+    let icon = gtk4::Box::builder()
+        .halign(gtk4::Align::Center)
+        .valign(gtk4::Align::Center)
+        .build();
+    icon.add_css_class("endpoint-icon");
+    let icon_name = match kind {
+        EndpointKind::Output => "audio-speakers-symbolic",
+        EndpointKind::Input => "audio-input-microphone-symbolic",
+    };
+    let glyph = Image::from_icon_name(icon_name);
+    glyph.set_pixel_size(18);
+    glyph.set_hexpand(true);
+    glyph.set_vexpand(true);
+    glyph.set_halign(gtk4::Align::Center);
+    glyph.set_valign(gtk4::Align::Center);
+    icon.append(&glyph);
     let labels = gtk4::Box::builder()
         .orientation(Orientation::Vertical)
         .spacing(1)
@@ -212,28 +266,57 @@ fn endpoint_widgets(kind: EndpointKind, heading: &str, subtitle: &str) -> Endpoi
     detail.add_css_class("endpoint-subtitle");
     labels.append(&title);
     labels.append(&detail);
+    let mute_group = gtk4::Box::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(7)
+        .valign(gtk4::Align::Center)
+        .build();
+    mute_group.add_css_class("mute-group");
+    let mute_label = Label::new(Some("静音"));
+    mute_label.add_css_class("control-label");
     let mute = Switch::new();
     mute.add_css_class("mute-switch");
+    mute.set_tooltip_text(Some("切换设备静音"));
+    mute_group.append(&mute_label);
+    mute_group.append(&mute);
+    head.append(&icon);
     head.append(&labels);
-    head.append(&mute);
+    head.append(&mute_group);
     let devices = StringList::new(&[]);
     let selector = DropDown::builder().model(&devices).hexpand(true).build();
     selector.add_css_class("device-selector");
+    selector.set_tooltip_text(Some("选择当前使用的音频设备"));
+    let selector_row = gtk4::Box::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(10)
+        .build();
+    let selector_label = Label::new(Some("设备"));
+    selector_label.set_width_chars(4);
+    selector_label.set_xalign(0.0);
+    selector_label.add_css_class("control-label");
+    selector_row.append(&selector_label);
+    selector_row.append(&selector);
     let controls = gtk4::Box::builder()
         .orientation(Orientation::Horizontal)
         .spacing(10)
         .build();
+    let volume_label = Label::new(Some("音量"));
+    volume_label.set_width_chars(4);
+    volume_label.set_xalign(0.0);
+    volume_label.add_css_class("control-label");
     let volume = Scale::with_range(Orientation::Horizontal, 0.0, 150.0, 1.0);
     volume.set_draw_value(false);
     volume.set_hexpand(true);
     volume.add_css_class("volume-scale");
+    volume.set_tooltip_text(Some("调节设备音量，最高 150%"));
     let value = Label::new(Some("0%"));
     value.set_width_chars(4);
     value.add_css_class("volume-value");
+    controls.append(&volume_label);
     controls.append(&volume);
     controls.append(&value);
     card.append(&head);
-    card.append(&selector);
+    card.append(&selector_row);
     card.append(&controls);
     EndpointWidgets {
         kind,
