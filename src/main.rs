@@ -27,35 +27,65 @@ fn main() {
     signal_hook::flag::register(signal_hook::consts::SIGWINCH, Arc::clone(&toggle_requested))
         .expect("failed to register window toggle signal");
     let application = gtk4::Application::new(Some(APP_ID), Default::default());
-    application.connect_activate(move |app| activate(app, Arc::clone(&toggle_requested)));
+    // 面板常驻：首次激活时创建，之后的每次激活（重复点击）只负责显示/隐藏。
+    let panel = Rc::new(RefCell::new(None::<Panel>));
+    application.connect_activate(move |app| {
+        let mut slot = panel.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(Panel::create(app, Arc::clone(&toggle_requested)));
+        } else {
+            slot.as_ref().unwrap().toggle();
+        }
+    });
     application.run();
 }
 
-fn activate(app: &gtk4::Application, toggle_requested: Arc<AtomicBool>) {
-    install_css();
-    let service = AudioService::spawn();
-    let window = ApplicationWindow::builder()
-        .application(app)
-        .default_width(WINDOW_WIDTH)
-        .default_height(WINDOW_HEIGHT)
-        .build();
-    configure_layer_shell(&window);
-    let ui = Rc::new(Controls::new());
-    bind_controls(&ui, service.commands.clone());
-    window.set_child(Some(&ui.root));
-    poll_events(Rc::clone(&ui), service);
-    window.present();
-    poll_window_toggle(window, toggle_requested);
+/// 常驻的声音面板：窗口、UI 与可见状态都只创建一次。
+struct Panel {
+    window: ApplicationWindow,
+    visible: Rc<Cell<bool>>,
 }
 
-fn poll_window_toggle(window: ApplicationWindow, toggle_requested: Arc<AtomicBool>) {
+impl Panel {
+    fn create(app: &gtk4::Application, toggle_requested: Arc<AtomicBool>) -> Self {
+        install_css();
+        let service = AudioService::spawn();
+        let window = ApplicationWindow::builder()
+            .application(app)
+            .default_width(WINDOW_WIDTH)
+            .default_height(WINDOW_HEIGHT)
+            .build();
+        configure_layer_shell(&window);
+        let ui = Rc::new(Controls::new());
+        bind_controls(&ui, service.commands.clone());
+        window.set_child(Some(&ui.root));
+        let visible = Rc::new(Cell::new(true));
+        poll_events(Rc::clone(&ui), service);
+        poll_window_toggle(window.clone(), toggle_requested, Rc::clone(&visible));
+        window.present();
+        Self { window, visible }
+    }
+    fn toggle(&self) {
+        toggle_window(&self.window, &self.visible);
+    }
+}
+
+fn toggle_window(window: &ApplicationWindow, visible: &Cell<bool>) {
+    if visible.replace(!visible.get()) {
+        window.set_visible(false);
+    } else {
+        window.present();
+    }
+}
+
+fn poll_window_toggle(
+    window: ApplicationWindow,
+    toggle_requested: Arc<AtomicBool>,
+    visible: Rc<Cell<bool>>,
+) {
     gtk4::glib::timeout_add_local(Duration::from_millis(16), move || {
         if toggle_requested.swap(false, Ordering::Relaxed) {
-            if window.is_visible() {
-                window.set_visible(false);
-            } else {
-                window.present();
-            }
+            toggle_window(&window, &visible);
         }
         gtk4::glib::ControlFlow::Continue
     });
@@ -97,6 +127,8 @@ struct EndpointWidgets {
     value: Label,
     selected: Rc<RefCell<Vec<AudioDevice>>>,
     updating: Rc<Cell<bool>>,
+    /// 用户正在拖动音量滑竿（等待防抖命令发出），期间快照不得回写滑竿与数值。
+    dirty: Rc<Cell<bool>>,
 }
 
 struct Controls {
@@ -214,11 +246,13 @@ impl Controls {
         endpoint.selected.replace(state.devices);
         endpoint.selector.set_selected(selected as u32);
         if let Some(device) = endpoint.selected.borrow().get(selected) {
-            endpoint.volume.set_value(device.volume * 100.0);
-            endpoint.mute.set_active(device.muted);
-            endpoint
-                .value
-                .set_text(&format!("{:.0}%", device.volume * 100.0));
+            if !endpoint.dirty.get() {
+                endpoint.volume.set_value(device.volume * 100.0);
+                endpoint.mute.set_active(device.muted);
+                endpoint
+                    .value
+                    .set_text(&format!("{:.0}%", device.volume * 100.0));
+            }
             endpoint.card.set_sensitive(true);
             endpoint.card.remove_css_class("muted");
             if device.muted {
@@ -316,10 +350,11 @@ fn endpoint_widgets(kind: EndpointKind, heading: &str, subtitle: &str) -> Endpoi
         value,
         selected: Rc::new(RefCell::new(Vec::new())),
         updating: Rc::new(Cell::new(false)),
+        dirty: Rc::new(Cell::new(false)),
     }
 }
 
-fn bind_controls(ui: &Rc<Controls>, commands: std::sync::mpsc::Sender<AudioCommand>) {
+fn bind_controls(ui: &Controls, commands: std::sync::mpsc::Sender<AudioCommand>) {
     let refresh = commands.clone();
     ui.refresh.connect_clicked(move |_| {
         let _ = refresh.send(AudioCommand::Refresh);
@@ -347,7 +382,9 @@ fn bind_endpoint(endpoint: &EndpointWidgets, commands: std::sync::mpsc::Sender<A
     let kind = endpoint.kind;
     let devices = Rc::clone(&endpoint.selected);
     let updating = Rc::clone(&endpoint.updating);
+    let dirty = Rc::clone(&endpoint.dirty);
     let selector = endpoint.selector.clone();
+    let value = endpoint.value.clone();
     let tx = commands.clone();
     let pending_volume = Rc::new(RefCell::new(None::<gtk4::glib::SourceId>));
     let latest_volume = Rc::new(Cell::new(0.0));
@@ -355,15 +392,21 @@ fn bind_endpoint(endpoint: &EndpointWidgets, commands: std::sync::mpsc::Sender<A
         if updating.get() {
             return;
         }
-        latest_volume.set(scale.value() / 100.0);
+        let percent = scale.value();
+        latest_volume.set(percent / 100.0);
+        // 立即反馈数值，不等 PulseAudio 快照回来。
+        value.set_text(&format!("{percent:.0}%"));
+        dirty.set(true);
         if pending_volume.borrow().is_none() {
             let pending = Rc::clone(&pending_volume);
             let latest = Rc::clone(&latest_volume);
             let devices = Rc::clone(&devices);
             let selector = selector.clone();
             let tx = tx.clone();
+            let dirty = Rc::clone(&dirty);
             let source = gtk4::glib::timeout_add_local_once(Duration::from_millis(80), move || {
                 pending.borrow_mut().take();
+                dirty.set(false);
                 if let Some(device) = devices.borrow().get(selector.selected() as usize) {
                     let _ = tx.send(AudioCommand::SetVolume {
                         kind,
