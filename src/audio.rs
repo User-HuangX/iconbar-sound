@@ -183,6 +183,8 @@ struct PulseBackend {
     output: EndpointState,
     input: EndpointState,
     meter: Option<Stream>,
+    /// 电平流当前连接的录音源名；用于避免每次刷新都断开重建电平流。
+    meter_source: Option<String>,
 }
 impl PulseBackend {
     fn new() -> Result<Self, String> {
@@ -234,6 +236,7 @@ impl PulseBackend {
                 default_name: None,
             },
             meter: None,
+            meter_source: None,
         })
     }
     fn endpoint_mut(&mut self, kind: EndpointKind) -> &mut EndpointState {
@@ -295,7 +298,13 @@ impl PulseBackend {
             .recv_timeout(Duration::from_secs(2))
             .map_err(|_| "读取 PulseAudio 输出设备超时")?;
         drop(operation);
-        Ok(Arc::try_unwrap(devices).unwrap().into_inner().unwrap())
+        // 枚举完成后直接从共享缓冲取回设备。回调闭包由主循环线程异步释放，此时
+        // Arc 引用计数可能仍 >1，Arc::try_unwrap().unwrap() 会 panic（曾导致
+        // worker 线程崩溃、音量调节失效）；锁中毒也一并兜底。
+        let mut guard = devices
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Ok(std::mem::take(&mut *guard))
     }
     fn query_inputs(&mut self) -> Result<Vec<AudioDevice>, String> {
         let (done_tx, done_rx) = mpsc::channel();
@@ -330,7 +339,11 @@ impl PulseBackend {
             .recv_timeout(Duration::from_secs(2))
             .map_err(|_| "读取 PulseAudio 输入设备超时")?;
         drop(operation);
-        Ok(Arc::try_unwrap(devices).unwrap().into_inner().unwrap())
+        // 同 query_outputs：闭包异步释放期间 try_unwrap 会 panic，改用锁直接取回。
+        let mut guard = devices
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Ok(std::mem::take(&mut *guard))
     }
     fn query_defaults(&mut self) -> Result<(Option<String>, Option<String>), String> {
         let (tx, rx) = mpsc::channel();
@@ -466,7 +479,12 @@ impl AudioBackend for PulseBackend {
         self.output.default_name = sink;
         self.input.default_name = source;
         if let Some(source) = self.input.default_name.clone() {
-            self.start_meter(&source)?;
+            // 仅在默认录音源变化时才重建电平流：此前每次刷新都断开重连，流在连接
+            // 未就绪期间 peek 会持续报 BADSTATE，导致错误横幅被刷屏。
+            if self.meter_source.as_deref() != Some(source.as_str()) {
+                self.start_meter(&source)?;
+                self.meter_source = Some(source);
+            }
         }
         Ok(vec![self.output.clone(), self.input.clone()])
     }
@@ -488,6 +506,7 @@ impl AudioBackend for PulseBackend {
         self.move_streams(kind, index)?;
         if kind == EndpointKind::Input {
             self.start_meter(&device.name)?;
+            self.meter_source = Some(device.name.clone());
         }
         self.endpoint_mut(kind).default_name = Some(device.name);
         Ok(())
@@ -610,6 +629,16 @@ pub fn rms_level(samples: &[i16]) -> f64 {
     (sum / samples.len() as f64).sqrt().clamp(0.0, 1.0)
 }
 
+/// 判断 PulseAudio 回显的实测音量是否已确认用户的请求值。
+/// 只在快照值已贴近请求值（容忍取整误差）时才算确认，避免发送命令前生成的旧快照
+/// 把滑竿拽回旧值；`None` 表示没有待确认的请求，快照可自由写回。
+pub fn volume_confirmed(actual: f64, requested: Option<f64>) -> bool {
+    match requested {
+        Some(target) => (actual - target).abs() <= 0.005,
+        None => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,6 +694,19 @@ mod tests {
         fn microphone_level(&mut self) -> Result<f64, String> {
             Ok(0.25)
         }
+    }
+    #[test]
+    fn volume_confirmed_waits_for_echo() {
+        // 无待确认请求：快照可直接写回。
+        assert!(volume_confirmed(0.63, None));
+        // 快照回显了请求值（容忍取整误差）：确认并解锁。
+        assert!(volume_confirmed(0.63, Some(0.63)));
+        assert!(volume_confirmed(0.6295, Some(0.63)));
+        // 仍是发送命令前的旧值：未确认，快照不得回写。
+        assert!(!volume_confirmed(0.62, Some(0.63)));
+        assert!(!volume_confirmed(0.63, Some(0.80)));
+        // 设备封顶（请求 150% 但只到 100%）：未确认，等兜底超时解锁。
+        assert!(!volume_confirmed(1.0, Some(1.5)));
     }
     #[test]
     fn rms_is_normalized() {

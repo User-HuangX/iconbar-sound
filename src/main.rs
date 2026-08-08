@@ -10,7 +10,10 @@ use std::{
     time::Duration,
 };
 
-use audio::{AudioCommand, AudioDevice, AudioEvent, AudioService, EndpointKind, EndpointState};
+use audio::{
+    AudioCommand, AudioDevice, AudioEvent, AudioService, EndpointKind, EndpointState,
+    volume_confirmed,
+};
 use gtk4::{
     ApplicationWindow, Button, DropDown, Image, Label, Orientation, ProgressBar, Scale, StringList,
     Switch, prelude::*,
@@ -127,8 +130,9 @@ struct EndpointWidgets {
     value: Label,
     selected: Rc<RefCell<Vec<AudioDevice>>>,
     updating: Rc<Cell<bool>>,
-    /// 用户正在拖动音量滑竿（等待防抖命令发出），期间快照不得回写滑竿与数值。
-    dirty: Rc<Cell<bool>>,
+    /// 用户拖动音量后、等待 PulseAudio 快照确认的请求值；确认前快照不得回写滑竿与数值。
+    /// `None` 表示没有待确认的请求，快照可以自由写回。
+    pending: Rc<Cell<Option<f64>>>,
 }
 
 struct Controls {
@@ -246,7 +250,11 @@ impl Controls {
         endpoint.selected.replace(state.devices);
         endpoint.selector.set_selected(selected as u32);
         if let Some(device) = endpoint.selected.borrow().get(selected) {
-            if !endpoint.dirty.get() {
+            // 仅当快照已确认用户的音量请求（或无待确认请求）时才回写滑竿与数值；
+            // 发送命令前生成的旧快照不得把滑竿拽回旧值（否则会再次触发 value_changed
+            // 并把旧值发回 PulseAudio，导致音量被主动还原）。
+            if volume_confirmed(device.volume, endpoint.pending.get()) {
+                endpoint.pending.set(None);
                 endpoint.volume.set_value(device.volume * 100.0);
                 endpoint.mute.set_active(device.muted);
                 endpoint
@@ -350,7 +358,7 @@ fn endpoint_widgets(kind: EndpointKind, heading: &str, subtitle: &str) -> Endpoi
         value,
         selected: Rc::new(RefCell::new(Vec::new())),
         updating: Rc::new(Cell::new(false)),
-        dirty: Rc::new(Cell::new(false)),
+        pending: Rc::new(Cell::new(None)),
     }
 }
 
@@ -367,11 +375,27 @@ fn bind_endpoint(endpoint: &EndpointWidgets, commands: std::sync::mpsc::Sender<A
     let kind = endpoint.kind;
     let devices = Rc::clone(&endpoint.selected);
     let updating = Rc::clone(&endpoint.updating);
+    let pending = Rc::clone(&endpoint.pending);
     let tx = commands.clone();
+    // 防抖计时器：按最后一次拖动重新计时，停止拖动 80ms 后才真正发送命令。
+    let debounce = Rc::new(RefCell::new(None::<gtk4::glib::SourceId>));
+    // 兜底解锁计时器：快照迟迟无法确认请求值（设备封顶、蓝牙量化等）时，超时后放行回写。
+    let give_up = Rc::new(RefCell::new(None::<gtk4::glib::SourceId>));
+    let selector_debounce = Rc::clone(&debounce);
+    let selector_give_up = Rc::clone(&give_up);
     endpoint.selector.connect_selected_notify(move |selector| {
         if updating.get() {
             return;
         }
+        // 切换设备后旧请求不再有意义：先取消未触发的防抖与兜底计时器，再作废待确认
+        // 音量，防止把设备 A 的拖动值误发到设备 B 上。
+        if let Some(source) = selector_debounce.borrow_mut().take() {
+            let _ = source.remove();
+        }
+        if let Some(source) = selector_give_up.borrow_mut().take() {
+            let _ = source.remove();
+        }
+        pending.set(None);
         if let Some(device) = devices.borrow().get(selector.selected() as usize) {
             let _ = tx.send(AudioCommand::Select {
                 kind,
@@ -382,11 +406,10 @@ fn bind_endpoint(endpoint: &EndpointWidgets, commands: std::sync::mpsc::Sender<A
     let kind = endpoint.kind;
     let devices = Rc::clone(&endpoint.selected);
     let updating = Rc::clone(&endpoint.updating);
-    let dirty = Rc::clone(&endpoint.dirty);
+    let pending = Rc::clone(&endpoint.pending);
     let selector = endpoint.selector.clone();
     let value = endpoint.value.clone();
     let tx = commands.clone();
-    let pending_volume = Rc::new(RefCell::new(None::<gtk4::glib::SourceId>));
     let latest_volume = Rc::new(Cell::new(0.0));
     endpoint.volume.connect_value_changed(move |scale| {
         if updating.get() {
@@ -396,27 +419,46 @@ fn bind_endpoint(endpoint: &EndpointWidgets, commands: std::sync::mpsc::Sender<A
         latest_volume.set(percent / 100.0);
         // 立即反馈数值，不等 PulseAudio 快照回来。
         value.set_text(&format!("{percent:.0}%"));
-        dirty.set(true);
-        if pending_volume.borrow().is_none() {
-            let pending = Rc::clone(&pending_volume);
-            let latest = Rc::clone(&latest_volume);
-            let devices = Rc::clone(&devices);
-            let selector = selector.clone();
-            let tx = tx.clone();
-            let dirty = Rc::clone(&dirty);
-            let source = gtk4::glib::timeout_add_local_once(Duration::from_millis(80), move || {
-                pending.borrow_mut().take();
-                dirty.set(false);
-                if let Some(device) = devices.borrow().get(selector.selected() as usize) {
-                    let _ = tx.send(AudioCommand::SetVolume {
-                        kind,
-                        index: device.index,
-                        volume: latest.get(),
-                    });
-                }
-            });
-            pending_volume.replace(Some(source));
+        // 锁定快照回写：只有快照确认了该值（或兜底超时）后才允许写回滑竿。
+        pending.set(Some(percent / 100.0));
+        // 用户重新拖动即作废上一次的兜底计时，以最新请求为准。
+        if let Some(source) = give_up.borrow_mut().take() {
+            let _ = source.remove();
         }
+        // 防抖按最后一次变化重新计时，而不是只等待一次 80ms。
+        if let Some(source) = debounce.borrow_mut().take() {
+            let _ = source.remove();
+        }
+        let debounce_timer = Rc::clone(&debounce);
+        let give_up_timer = Rc::clone(&give_up);
+        let pending_target = Rc::clone(&pending);
+        let latest = Rc::clone(&latest_volume);
+        let devices = Rc::clone(&devices);
+        let selector = selector.clone();
+        let tx = tx.clone();
+        let source = gtk4::glib::timeout_add_local_once(Duration::from_millis(80), move || {
+            debounce_timer.borrow_mut().take();
+            if let Some(device) = devices.borrow().get(selector.selected() as usize) {
+                let _ = tx.send(AudioCommand::SetVolume {
+                    kind,
+                    index: device.index,
+                    volume: latest.get(),
+                });
+            }
+            // 发送后仍保持锁定，直到快照确认回显值；确认不了时 3 秒后兜底解锁，
+            // 让下一次快照把滑竿同步回真实值。
+            if let Some(source) = give_up_timer.borrow_mut().take() {
+                let _ = source.remove();
+            }
+            let give_up_source = Rc::clone(&give_up_timer);
+            let pending_target = Rc::clone(&pending_target);
+            let source = gtk4::glib::timeout_add_local_once(Duration::from_millis(3000), move || {
+                give_up_source.borrow_mut().take();
+                pending_target.set(None);
+            });
+            give_up_timer.replace(Some(source));
+        });
+        debounce.replace(Some(source));
     });
     let kind = endpoint.kind;
     let devices = Rc::clone(&endpoint.selected);
