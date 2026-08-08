@@ -110,6 +110,14 @@ struct Controls {
     refresh: Button,
 }
 
+/// 构建一个左对齐、带样式类的标签。
+fn label(text: &str, class: &str) -> Label {
+    let label = Label::new(Some(text));
+    label.set_xalign(0.0);
+    label.add_css_class(class);
+    label
+}
+
 impl Controls {
     fn new() -> Self {
         let root = gtk4::Box::builder()
@@ -122,27 +130,21 @@ impl Controls {
             .build();
         root.add_css_class("sound-panel");
 
-        let header = gtk4::Box::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(9)
-            .build();
-        header.add_css_class("panel-header");
+        let refresh = Button::builder().label("刷新").build();
+        refresh.add_css_class("refresh-button");
+        refresh.set_tooltip_text(Some("重新扫描音频设备"));
         let heading = gtk4::Box::builder()
             .orientation(Orientation::Vertical)
             .spacing(1)
             .hexpand(true)
             .build();
-        let title = Label::new(Some("声音"));
-        title.set_xalign(0.0);
-        title.add_css_class("panel-title");
-        let description = Label::new(Some("输出与输入设备"));
-        description.set_xalign(0.0);
-        description.add_css_class("panel-description");
-        heading.append(&title);
-        heading.append(&description);
-        let refresh = Button::builder().label("刷新").build();
-        refresh.add_css_class("refresh-button");
-        refresh.set_tooltip_text(Some("重新扫描音频设备"));
+        heading.append(&label("声音", "panel-title"));
+        heading.append(&label("输出与输入设备", "panel-description"));
+        let header = gtk4::Box::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(9)
+            .build();
+        header.add_css_class("panel-header");
         header.append(&heading);
         header.append(&refresh);
         root.append(&header);
@@ -153,28 +155,26 @@ impl Controls {
             "耳机、扬声器和其他播放设备",
         );
         let input = endpoint_widgets(EndpointKind::Input, "麦克风", "输入电平与录音设备");
+
+        let level = ProgressBar::new();
+        level.set_hexpand(true);
+        level.add_css_class("input-level");
+        let meter_state = label("等待信号", "meter-state");
         let meter = gtk4::Box::builder()
             .orientation(Orientation::Horizontal)
             .spacing(10)
             .build();
         meter.add_css_class("meter-row");
-        let meter_label = Label::new(Some("输入电平"));
-        meter_label.add_css_class("meter-label");
-        let level = ProgressBar::new();
-        level.set_hexpand(true);
-        level.add_css_class("input-level");
-        let meter_state = Label::new(Some("等待信号"));
-        meter_state.add_css_class("meter-state");
-        meter.append(&meter_label);
+        meter.append(&label("输入电平", "meter-label"));
         meter.append(&level);
         meter.append(&meter_state);
         input.card.append(&meter);
+
         root.append(&output.card);
         root.append(&input.card);
-        let error = Label::new(None);
+
+        let error = label("", "error-text");
         error.set_wrap(true);
-        error.set_xalign(0.0);
-        error.add_css_class("error-text");
         let error_revealer = gtk4::Revealer::builder()
             .transition_type(gtk4::RevealerTransitionType::SlideDown)
             .transition_duration(180)
@@ -245,47 +245,32 @@ fn endpoint_widgets(kind: EndpointKind, heading: &str, subtitle: &str) -> Endpoi
         .orientation(Orientation::Horizontal)
         .spacing(10)
         .build();
-    let icon = gtk4::Box::builder()
-        .halign(gtk4::Align::Center)
-        .valign(gtk4::Align::Center)
-        .build();
-    icon.add_css_class("endpoint-icon");
     let icon_name = match kind {
         EndpointKind::Output => "audio-speakers-symbolic",
         EndpointKind::Input => "audio-input-microphone-symbolic",
     };
-    let glyph = Image::from_icon_name(icon_name);
-    glyph.set_pixel_size(18);
-    glyph.set_hexpand(true);
-    glyph.set_vexpand(true);
-    glyph.set_halign(gtk4::Align::Center);
-    glyph.set_valign(gtk4::Align::Center);
-    icon.append(&glyph);
+    let icon = Image::from_icon_name(icon_name);
+    icon.set_pixel_size(18);
+    icon.set_halign(gtk4::Align::Center);
+    icon.set_valign(gtk4::Align::Center);
+    icon.add_css_class("endpoint-icon");
     let labels = gtk4::Box::builder()
         .orientation(Orientation::Vertical)
         .spacing(1)
         .hexpand(true)
         .build();
-    let title = Label::new(Some(heading));
-    title.set_xalign(0.0);
-    title.add_css_class("endpoint-title");
-    let detail = Label::new(Some(subtitle));
-    detail.set_xalign(0.0);
-    detail.add_css_class("endpoint-subtitle");
-    labels.append(&title);
-    labels.append(&detail);
+    labels.append(&label(heading, "endpoint-title"));
+    labels.append(&label(subtitle, "endpoint-subtitle"));
     let mute_group = gtk4::Box::builder()
         .orientation(Orientation::Horizontal)
         .spacing(7)
         .valign(gtk4::Align::Center)
         .build();
     mute_group.add_css_class("mute-group");
-    let mute_label = Label::new(Some("静音"));
-    mute_label.add_css_class("control-label");
+    mute_group.append(&label("静音", "control-label"));
     let mute = Switch::new();
     mute.add_css_class("mute-switch");
     mute.set_tooltip_text(Some("切换设备静音"));
-    mute_group.append(&mute_label);
     mute_group.append(&mute);
     head.append(&icon);
     head.append(&labels);
@@ -298,34 +283,29 @@ fn endpoint_widgets(kind: EndpointKind, heading: &str, subtitle: &str) -> Endpoi
         .orientation(Orientation::Horizontal)
         .spacing(10)
         .build();
-    let selector_label = Label::new(Some("设备"));
+    let selector_label = label("设备", "control-label");
     selector_label.set_width_chars(4);
-    selector_label.set_xalign(0.0);
-    selector_label.add_css_class("control-label");
     selector_row.append(&selector_label);
     selector_row.append(&selector);
-    let controls = gtk4::Box::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(10)
-        .build();
-    let volume_label = Label::new(Some("音量"));
+    let volume_label = label("音量", "control-label");
     volume_label.set_width_chars(4);
-    volume_label.set_xalign(0.0);
-    volume_label.add_css_class("control-label");
     let volume = Scale::with_range(Orientation::Horizontal, 0.0, 150.0, 1.0);
     volume.set_draw_value(false);
     volume.set_hexpand(true);
     volume.add_css_class("volume-scale");
     volume.set_tooltip_text(Some("调节设备音量，最高 150%"));
-    let value = Label::new(Some("0%"));
+    let value = label("0%", "volume-value");
     value.set_width_chars(4);
-    value.add_css_class("volume-value");
-    controls.append(&volume_label);
-    controls.append(&volume);
-    controls.append(&value);
+    let volume_row = gtk4::Box::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(10)
+        .build();
+    volume_row.append(&volume_label);
+    volume_row.append(&volume);
+    volume_row.append(&value);
     card.append(&head);
     card.append(&selector_row);
-    card.append(&controls);
+    card.append(&volume_row);
     EndpointWidgets {
         kind,
         card,
