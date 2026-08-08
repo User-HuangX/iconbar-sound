@@ -170,10 +170,16 @@ dropdown.device-selector button image {
   color: @ibs_text_3;
 }
 
-/* 下拉弹层：跟随深色面板（GTK 默认弹层可能是浅色） */
-dropdown.device-selector popover {
+/* 下拉弹层：跟随深色面板。
+ * 注意：弹层底色实际画在 popover > contents 节点上（主题规则），
+ * 只设 popover 的背景会被 contents 盖住，必须连 contents 一起设。 */
+dropdown.device-selector popover,
+dropdown.device-selector popover > contents {
   background: @ibs_elevated;
   color: @ibs_text;
+}
+
+dropdown.device-selector popover > contents {
   border-radius: 10px;
   border: 1px solid @ibs_hairline;
 }
@@ -183,7 +189,8 @@ dropdown.device-selector popover listview {
   color: @ibs_text;
 }
 
-dropdown.device-selector popover row {
+dropdown.device-selector popover row,
+dropdown.device-selector popover row > box > label {
   background: transparent;
   color: @ibs_text;
   border-radius: 6px;
@@ -194,7 +201,8 @@ dropdown.device-selector popover row:hover {
   background: @ibs_control_hi;
 }
 
-dropdown.device-selector popover row:selected {
+dropdown.device-selector popover row:selected,
+dropdown.device-selector popover row:selected > box > label {
   background: @ibs_accent_dim;
   color: @ibs_accent_hi;
 }
