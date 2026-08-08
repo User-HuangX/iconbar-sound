@@ -1,77 +1,100 @@
-/* 深色自然主题 —— 森林夜色 */
+/* 现代深色主题 —— 中性深灰 + 青蓝强调色
+ * 设计原则：
+ *  - 层级靠背景色差与圆角区分，不堆叠描边块；
+ *  - 字号整体放大（标题 16 / 正文 13-14 / 辅助 11-12）；
+ *  - 单一强调色 teal，状态色（静音琥珀、错误红）仅用于语义反馈。 */
+
+@define-color ibs_bg_top      #1a1b20;
+@define-color ibs_bg_bottom   #141519;
+@define-color ibs_elevated    #1f2126;
+@define-color ibs_elevated_hi #262830;
+@define-color ibs_control     #272a31;
+@define-color ibs_control_hi  #30343d;
+@define-color ibs_track       #363a44;
+@define-color ibs_hairline    rgba(255, 255, 255, 0.05);
+@define-color ibs_text        #e9ebef;
+@define-color ibs_text_2      #9aa1ad;
+@define-color ibs_text_3      #717885;
+@define-color ibs_accent      #46d8c3;
+@define-color ibs_accent_hi   #6ae9d8;
+@define-color ibs_accent_dim  rgba(70, 216, 195, 0.14);
+@define-color ibs_accent_focus rgba(70, 216, 195, 0.25);
+@define-color ibs_muted_amber #d9a05b;
+@define-color ibs_error_bg    #2a1d21;
+@define-color ibs_error_border rgba(255, 120, 110, 0.16);
+@define-color ibs_error_text  #ff9889;
+
 .sound-window {
   background: transparent;
 }
 
 .sound-panel {
-  background: linear-gradient(180deg, #242b24 0%, #1d241e 100%);
-  border: 1px solid #39453b;
+  background: linear-gradient(180deg, @ibs_bg_top 0%, @ibs_bg_bottom 100%);
+  border: 1px solid @ibs_hairline;
   border-radius: 14px;
   box-shadow:
-    0 14px 34px rgba(0, 0, 0, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  color: #d6ddd2;
+    0 16px 40px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  color: @ibs_text;
   font-family: "Inter", "Noto Sans CJK SC", sans-serif;
 }
 
 .panel-header {
   min-height: 38px;
-  padding: 5px 10px;
-  border: 1px solid #333d34;
-  border-radius: 10px;
-  background: #1a211b;
+  padding: 5px 12px;
+  border: none;
+  border-radius: 12px;
+  background: @ibs_elevated;
 }
 
 .panel-title {
-  color: #c9b458;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
+  color: @ibs_text;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
 }
 
 .panel-description {
-  color: #7d8a7f;
-  font-size: 10px;
+  color: @ibs_text_2;
+  font-size: 12px;
 }
 
 button.refresh-button {
-  min-height: 28px;
-  padding: 2px 12px;
-  border: 1px solid #3d4a3f;
-  border-radius: 8px;
-  background: #232b24;
-  color: #aab5aa;
-  font-size: 11px;
-  font-weight: 700;
+  min-height: 30px;
+  padding: 2px 14px;
+  border: none;
+  border-radius: 9px;
+  background: @ibs_control;
+  color: @ibs_text_2;
+  font-size: 12px;
+  font-weight: 600;
   transition: 150ms ease-out;
 }
 
 button.refresh-button:hover {
-  border-color: #6f9b7d;
-  background: #29332b;
-  color: #e2e8de;
+  background: @ibs_control_hi;
+  color: @ibs_text;
 }
 
 button.refresh-button:active {
-  background: #1f2821;
+  background: @ibs_accent_dim;
+  color: @ibs_accent_hi;
 }
 
 button.refresh-button:focus {
-  border-color: #6f9b7d;
-  box-shadow: 0 0 0 3px rgba(111, 155, 125, 0.22);
+  box-shadow: 0 0 0 3px @ibs_accent_focus;
 }
 
 .endpoint-card {
-  padding: 10px 12px;
-  border: 1px solid #333d34;
-  border-radius: 11px;
-  background: #1a211b;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 12px;
+  background: @ibs_elevated;
   transition: 160ms ease-out;
 }
 
 .endpoint-card:hover {
-  border-color: #445344;
-  background: #1e261f;
+  background: @ibs_elevated_hi;
 }
 
 .endpoint-card:disabled {
@@ -79,44 +102,45 @@ button.refresh-button:focus {
 }
 
 .endpoint-card.muted {
-  border-color: #4a3d2b;
+  background: linear-gradient(180deg, #242021, #1e1c1e);
+  box-shadow: inset 0 0 0 1px rgba(217, 160, 91, 0.25);
 }
 
 .endpoint-icon {
   padding: 7px;
-  border: 1px solid #333d34;
-  border-radius: 9px;
-  background: #141a15;
+  border: none;
+  border-radius: 10px;
+  background: @ibs_accent_dim;
 }
 
 .output-card .endpoint-icon {
-  color: #7fae8f;
+  color: @ibs_accent;
 }
 
 .input-card .endpoint-icon {
-  color: #d5a46f;
+  color: #9db2cf;
 }
 
 .endpoint-card.muted .endpoint-icon {
-  border-color: #4a3d2b;
-  color: #c9a06a;
+  background: rgba(217, 160, 91, 0.12);
+  color: @ibs_muted_amber;
 }
 
 .endpoint-title {
-  color: #dfe5da;
-  font-size: 13px;
+  color: @ibs_text;
+  font-size: 14px;
   font-weight: 700;
 }
 
 .endpoint-subtitle {
-  color: #7d8a7f;
-  font-size: 10px;
+  color: @ibs_text_2;
+  font-size: 11px;
 }
 
 .control-label {
-  color: #96a396;
-  font-size: 10px;
-  font-weight: 700;
+  color: @ibs_text_2;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .mute-group {
@@ -124,98 +148,134 @@ button.refresh-button:focus {
 }
 
 dropdown.device-selector button {
-  min-height: 28px;
-  padding: 0 9px;
-  border: 1px solid #333d34;
-  border-radius: 7px;
-  background: #141a15;
-  color: #dfe5da;
-  font-size: 11px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: @ibs_control;
+  color: @ibs_text;
+  font-size: 13px;
   transition: 150ms ease-out;
 }
 
 dropdown.device-selector button:hover {
-  border-color: #6f9b7d;
-  background: #192019;
+  background: @ibs_control_hi;
 }
 
 dropdown.device-selector button:focus {
-  border-color: #6f9b7d;
-  box-shadow: 0 0 0 3px rgba(111, 155, 125, 0.2);
+  box-shadow: 0 0 0 3px @ibs_accent_focus;
+}
+
+dropdown.device-selector button image {
+  color: @ibs_text_3;
+}
+
+/* 下拉弹层：跟随深色面板（GTK 默认弹层可能是浅色） */
+dropdown.device-selector popover {
+  background: @ibs_elevated;
+  color: @ibs_text;
+  border-radius: 10px;
+  border: 1px solid @ibs_hairline;
+}
+
+dropdown.device-selector popover listview {
+  background: transparent;
+  color: @ibs_text;
+}
+
+dropdown.device-selector popover row {
+  background: transparent;
+  color: @ibs_text;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+dropdown.device-selector popover row:hover {
+  background: @ibs_control_hi;
+}
+
+dropdown.device-selector popover row:selected {
+  background: @ibs_accent_dim;
+  color: @ibs_accent_hi;
 }
 
 switch.mute-switch {
-  min-width: 34px;
-  min-height: 18px;
-  border-radius: 9px;
-  background: #3d483f;
+  min-width: 36px;
+  min-height: 20px;
+  border-radius: 10px;
+  background: @ibs_track;
   transition: 150ms ease-out;
 }
 
 switch.mute-switch:hover {
-  background: #4a574c;
+  background: #40454f;
 }
 
 switch.mute-switch slider {
-  min-width: 14px;
-  min-height: 14px;
+  min-width: 16px;
+  min-height: 16px;
   margin: 2px;
+  border: none;
   border-radius: 50%;
-  background: #d8ddd2;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  background: #dfe3e9;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 switch.mute-switch:checked {
-  background: #c9a06a;
+  background: @ibs_accent;
+}
+
+switch.mute-switch:checked:hover {
+  background: @ibs_accent_hi;
 }
 
 switch.mute-switch:checked slider {
-  background: #f5f0e3;
+  background: #ffffff;
 }
 
 switch.mute-switch:focus {
-  box-shadow: 0 0 0 3px rgba(201, 160, 106, 0.25);
+  box-shadow: 0 0 0 3px @ibs_accent_focus;
 }
 
 scale.volume-scale trough {
   min-height: 6px;
   border-radius: 3px;
-  background: #3d483f;
+  background: @ibs_track;
 }
 
 scale.volume-scale highlight {
   border-radius: 3px;
-  background: linear-gradient(90deg, #5f9e8f, #7fae8f);
+  background: linear-gradient(90deg, #2ec4b0, @ibs_accent);
 }
 
 scale.volume-scale slider {
-  min-width: 14px;
-  min-height: 14px;
+  min-width: 16px;
+  min-height: 16px;
   margin: -5px;
   border: none;
   border-radius: 50%;
-  background: #bcd8c6;
+  background: #e8eaee;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
   transition: 150ms ease-out;
 }
 
 scale.volume-scale slider:hover {
-  background: #d6e8dc;
+  background: #ffffff;
 }
 
 scale.volume-scale:focus slider {
-  box-shadow: 0 0 0 4px rgba(127, 174, 143, 0.22);
+  box-shadow: 0 0 0 4px @ibs_accent_focus;
 }
 
 .volume-value {
-  min-width: 38px;
-  padding: 2px 5px;
-  border: 1px solid #333d34;
-  border-radius: 6px;
-  background: #141a15;
-  color: #7fae8f;
+  min-width: 40px;
+  padding: 2px 7px;
+  border: none;
+  border-radius: 7px;
+  background: @ibs_control;
+  color: @ibs_accent;
   font-feature-settings: "tnum";
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -225,34 +285,34 @@ scale.volume-scale:focus slider {
 
 .meter-label,
 .meter-state {
-  color: #96a396;
-  font-size: 9px;
-  font-weight: 700;
+  color: @ibs_text_2;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .meter-state {
   min-width: 44px;
-  color: #8fbf8f;
+  color: @ibs_accent;
 }
 
 progressbar.input-level trough {
   min-height: 6px;
   border-radius: 3px;
-  background: #141a15;
+  background: #2a2d35;
 }
 
 progressbar.input-level progress {
   border-radius: 3px;
-  background: linear-gradient(90deg, #6f9b7d, #9dc98f);
+  background: linear-gradient(90deg, #2a9d8f, @ibs_accent);
   transition: 90ms linear;
 }
 
 .error-text {
   padding: 6px 10px;
-  border: 1px solid #6e4545;
+  border: 1px solid @ibs_error_border;
   border-radius: 8px;
-  background: #332524;
-  color: #e08a7a;
-  font-size: 10px;
+  background: @ibs_error_bg;
+  color: @ibs_error_text;
+  font-size: 12px;
   font-weight: 600;
 }
